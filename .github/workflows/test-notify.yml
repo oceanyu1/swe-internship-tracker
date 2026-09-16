@@ -1,0 +1,62 @@
+name: Test notification
+
+# Manual only, on purpose. This workflow has no `schedule:` trigger and no
+# `contents: write` permission, so it can never run on its own and can never
+# commit data/seen_ids.json — firing it cannot mark a real role as seen.
+on:
+  workflow_dispatch:
+    inputs:
+      message:
+        description: "Text to send"
+        required: false
+        default: "Test alert from the Canada SWE internship tracker."
+
+permissions:
+  contents: read
+
+jobs:
+  test-notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Send test message
+        env:
+          NOTIFY_CHANNEL: ${{ secrets.NOTIFY_CHANNEL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TEST_MESSAGE: ${{ inputs.message }}
+        run: |
+          python - <<'PY'
+          import os
+          import tracker
+
+          # Reuse tracker.py's real send path (_post, the User-Agent header, the
+          # channel function) so a green run actually proves delivery works.
+          channel = os.environ.get("NOTIFY_CHANNEL", "").lower().strip()
+          if channel not in tracker.CHANNELS:
+              # tracker.notify() falls back to printing when the channel is unset.
+              # A delivery test must NOT do that -- silently "passing" without
+              # sending is the one outcome that would mislead you.
+              raise SystemExit(
+                  f"[error] NOTIFY_CHANNEL '{channel}' is unset or unrecognized; nothing sent."
+              )
+
+          note = os.environ.get("TEST_MESSAGE") or "Test alert from the tracker."
+          sample = tracker.format_role({
+              "company_name": "Example Corp (TEST)",
+              "title": "Software Engineering Intern",
+              "locations": ["Toronto, ON, Canada"],
+              "url": "https://github.com/oceanyu1/swe-internship-tracker",
+          })
+          blocks = [f"\u2705 {note}", "A real alert looks like this:", sample]
+          chunks = tracker.chunk_messages(blocks, tracker.CHAR_LIMITS[channel])
+          tracker.CHANNELS[channel](chunks)
+          print(f"[ok] Test message sent via {channel} in {len(chunks)} message(s).")
+          PY
