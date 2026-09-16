@@ -18,6 +18,7 @@ import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 FEED_URL = (
@@ -99,12 +100,28 @@ def format_role(listing):
 # Notifications  —  choose one with the NOTIFY_CHANNEL secret
 # ---------------------------------------------------------------------------
 def _post(url, data, headers=None):
+    # Discord sits behind Cloudflare, which blocks urllib's default
+    # "Python-urllib/3.x" User-Agent with a bare 403 (Cloudflare error 1010).
+    # Always send a real User-Agent; let callers override any header if needed.
+    hdrs = {
+        "Content-Type": "application/json",
+        "User-Agent": "canada-swe-intern-tracker (+https://github.com)",
+    }
+    if headers:
+        hdrs.update(headers)
     body = data if isinstance(data, bytes) else json.dumps(data).encode("utf-8")
-    req = urllib.request.Request(
-        url, data=body, headers=headers or {"Content-Type": "application/json"}
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return resp.status
+    req = urllib.request.Request(url, data=body, headers=hdrs)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status
+    except urllib.error.HTTPError as e:
+        # The status code alone can't tell a Cloudflare block from a dead
+        # webhook or a rate limit; the body can. Log host only — the webhook
+        # URL is a secret and CI logs are public.
+        host = urllib.parse.urlsplit(url).netloc
+        detail = e.read().decode("utf-8", "replace").strip()[:300]
+        print(f"[error] POST {host} -> {e.code} {e.reason}: {detail}", file=sys.stderr)
+        raise
 
 
 def send_discord(chunks):
